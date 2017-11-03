@@ -1709,6 +1709,9 @@ TcpSocketBase::ProcessAck (const SequenceNumber32 &ackNumber, bool scoreboardUpd
       // loss recovery check is done inside this function thanks to
       // the congestion state machine
       DupAck ();
+      // Artificially call PktsAcked: after all, one segment has been ACKed.
+      NS_LOG_INFO ("ACK of " << ackNumber << ", PktsAcked called (ACK already managed in DupAck)");
+      m_congestionControl->PktsAcked (m_tcb, 1, m_lastRtt);
     }
 
   if (ackNumber == m_txBuffer->HeadSequence ()
@@ -1726,12 +1729,6 @@ TcpSocketBase::ProcessAck (const SequenceNumber32 &ackNumber, bool scoreboardUpd
       // don't have anything to transmit
       NS_LOG_DEBUG ("Update nextTxSequence manually to " << ackNumber);
       m_tcb->m_nextTxSequence = ackNumber;
-    }
-  else if (ackNumber == m_txBuffer->HeadSequence ())
-    {
-      // DupAck. Artificially call PktsAcked: after all, one segment has been ACKed.
-      NS_LOG_INFO ("ACK of " << ackNumber << ", PktsAcked called (ACK already managed in DupAck)");
-      m_congestionControl->PktsAcked (m_tcb, 1, m_lastRtt);
     }
   else if (ackNumber > m_txBuffer->HeadSequence ())
     {

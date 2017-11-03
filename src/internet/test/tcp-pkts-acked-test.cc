@@ -20,6 +20,8 @@
 #include "tcp-general-test.h"
 #include "ns3/node.h"
 #include "ns3/log.h"
+#include "ns3/config.h"
+#include "tcp-error-model.h"
 
 using namespace ns3;
 
@@ -43,23 +45,25 @@ class DummyCongControl;
  * \see DummyCongControl
  * \see FinalChecks
  */
-class TcpPktsAckedOpenTest : public TcpGeneralTest
+class TcpPktsAckedTest : public TcpGeneralTest
 {
 public:
   /**
    * \brief Constructor.
    * \param desc Test description.
    */
-  TcpPktsAckedOpenTest (const std::string &desc);
+  TcpPktsAckedTest (const std::string &desc,
+                    std::vector<uint32_t> &toDrop);
 
   /**
    * \brief Called when an ACK is received.
    * \param segmentsAcked The segment ACKed.
    */
-  void PktsAckedCalled (uint32_t segmentsAcked);
+  void PktsAckedCalled (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked);
 
 protected:
   virtual Ptr<TcpSocketMsgBase> CreateSenderSocket (Ptr<Node> node);
+  virtual Ptr<ErrorModel> CreateReceiverErrorModel ();
   virtual void Rx (const Ptr<const Packet> p, const TcpHeader&h, SocketWho who);
 
   virtual void ConfigureEnvironment ();
@@ -68,9 +72,10 @@ protected:
 
 private:
   uint32_t m_segmentsAcked;    //!< Contains the number of times PktsAcked is called
-  uint32_t m_segmentsReceived; //!< Contains the ack number received
+  uint32_t m_bytesReceived; //!< Contains the ack number received
 
   Ptr<DummyCongControl> m_congCtl; //!< Dummy congestion control.
+  std::vector<uint32_t> m_toDrop;     //!< List of SequenceNumber to drop
 };
 
 /**
@@ -78,7 +83,7 @@ private:
  * \ingroup tests
  *
  * \brief Behaves as NewReno, except that each time PktsAcked is called,
- * a notification is sent to TcpPktsAckedOpenTest.
+ * a notification is sent to TcpPktsAckedTest.
  */
 class DummyCongControl : public TcpNewReno
 {
@@ -97,7 +102,7 @@ public:
    * \brief Set the callback to be used when an ACK is received.
    * \param test The callback.
    */
-  void SetCallback (Callback<void, uint32_t> test)
+  void SetCallback (Callback<void, Ptr<TcpSocketState>, uint32_t> test)
   {
     m_test = test;
   }
@@ -105,11 +110,11 @@ public:
   void PktsAcked (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked,
                   const Time& rtt)
   {
-    m_test (segmentsAcked);
+    m_test (tcb, segmentsAcked);
   }
 
 private:
-  Callback<void, uint32_t> m_test; //!< Callback to be used when an ACK is received.
+  Callback<void, Ptr<TcpSocketState>, uint32_t> m_test; //!< Callback to be used when an ACK is received.
 };
 
 TypeId
@@ -123,55 +128,71 @@ DummyCongControl::GetTypeId (void)
   return tid;
 }
 
-TcpPktsAckedOpenTest::TcpPktsAckedOpenTest (const std::string &desc)
+TcpPktsAckedTest::TcpPktsAckedTest (const std::string &desc,
+                                    std::vector<uint32_t> &toDrop)
   : TcpGeneralTest (desc),
     m_segmentsAcked (0),
-    m_segmentsReceived (0)
+    m_bytesReceived (0),
+    m_toDrop (toDrop)
 {
 }
 
 void
-TcpPktsAckedOpenTest::ConfigureEnvironment ()
+TcpPktsAckedTest::ConfigureEnvironment ()
 {
   TcpGeneralTest::ConfigureEnvironment ();
   SetAppPktCount (20);
   SetMTU (500);
+  Config::SetDefault ("ns3::TcpSocket::DelAckTimeout", TimeValue (Seconds (0)));
+  Config::SetDefault ("ns3::TcpSocket::DelAckCount", UintegerValue (1));
+  Config::SetDefault ("ns3::TcpSocketBase::Sack", BooleanValue (false));
 }
 
 Ptr<TcpSocketMsgBase>
-TcpPktsAckedOpenTest::CreateSenderSocket (Ptr<Node> node)
+TcpPktsAckedTest::CreateSenderSocket (Ptr<Node> node)
 {
   Ptr<TcpSocketMsgBase> s = TcpGeneralTest::CreateSenderSocket (node);
   m_congCtl = CreateObject<DummyCongControl> ();
-  m_congCtl->SetCallback (MakeCallback (&TcpPktsAckedOpenTest::PktsAckedCalled, this));
+  m_congCtl->SetCallback (MakeCallback (&TcpPktsAckedTest::PktsAckedCalled, this));
   s->SetCongestionControlAlgorithm (m_congCtl);
 
   return s;
 }
 
 void
-TcpPktsAckedOpenTest::PktsAckedCalled (uint32_t segmentsAcked)
+TcpPktsAckedTest::PktsAckedCalled (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked)
 {
-  m_segmentsAcked += segmentsAcked;
+        m_segmentsAcked += segmentsAcked;
 }
 
 void
-TcpPktsAckedOpenTest::Rx (const Ptr<const Packet> p, const TcpHeader &h, SocketWho who)
+TcpPktsAckedTest::Rx (const Ptr<const Packet> p, const TcpHeader &h, SocketWho who)
 {
   if (who == SENDER && (!(h.GetFlags () & TcpHeader::SYN)))
     {
-      m_segmentsReceived = h.GetAckNumber ().GetValue ();
+      m_bytesReceived = h.GetAckNumber ().GetValue ();
     }
 }
 
 void
-TcpPktsAckedOpenTest::FinalChecks ()
+TcpPktsAckedTest::FinalChecks ()
 {
-  NS_TEST_ASSERT_MSG_EQ (m_segmentsReceived / GetSegSize (SENDER), m_segmentsAcked,
+  std::cout << "m_segsReceived:" << m_bytesReceived / GetSegSize (SENDER) << "\tm_segmentsAcked " << m_segmentsAcked << std::endl;
+  NS_TEST_ASSERT_MSG_EQ (m_bytesReceived / GetSegSize (SENDER), m_segmentsAcked,
                          "Not all acked segments have been passed to PktsAcked method");
 }
 
+Ptr<ErrorModel>
+TcpPktsAckedTest::CreateReceiverErrorModel ()
+{
+  Ptr<TcpSeqErrorModel> m_errorModel = CreateObject<TcpSeqErrorModel> ();
+  for (std::vector<uint32_t>::iterator it = m_toDrop.begin (); it != m_toDrop.end (); ++it)
+    {
+      m_errorModel->AddSeqToKill (SequenceNumber32 (*it));
+    }
 
+  return m_errorModel;
+}
 
 /**
  * \ingroup internet-test
@@ -184,9 +205,13 @@ class TcpPktsAckedTestSuite : public TestSuite
 public:
   TcpPktsAckedTestSuite () : TestSuite ("tcp-pkts-acked-test", UNIT)
   {
-    AddTestCase (new TcpPktsAckedOpenTest ("PktsAcked check while in OPEN state"),
+    std::vector<uint32_t> toDrop;
+    AddTestCase (new TcpPktsAckedTest ("PktsAcked check while in OPEN state", toDrop),
                  TestCase::QUICK);
     // Add DISORDER, RECOVERY and LOSS state check
+    toDrop.push_back (2001);
+    AddTestCase (new TcpPktsAckedTest ("PktsAcked check while in all the states", toDrop),
+                 TestCase::QUICK);
   }
 };
 
